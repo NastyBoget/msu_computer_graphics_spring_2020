@@ -1,5 +1,6 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
+#define RAYS_PER_PIXEL 4
 
 #include "tiny_obj_loader.h"
 
@@ -10,6 +11,9 @@
 #include <vector>
 #include "geometry.h"
 #include "stb_image.h"
+
+int32_t cubemap_width, cubemap_height, cubemap_channels;
+uint8_t *cubemap_neg_x_raw, *cubemap_neg_y_raw, *cubemap_neg_z_raw, *cubemap_pos_x_raw, *cubemap_pos_y_raw, *cubemap_pos_z_raw;
 
 struct Light {
     Light(const Vec3f &p, const float &i) : position(p), intensity(i) {}
@@ -83,28 +87,6 @@ struct Triangle
     Material material;
     Triangle (const Vec3f &x, const Vec3f &y, const Vec3f &z,
             const Material &m): x(x), y(y), z(z), material(m) {}
-    bool intersection(const Ray &r, float &distance) const {
-        Vec3f e1 = y - x;
-        Vec3f e2 = z - x;
-        Vec3f pvec = cross(r.direction, e2);
-        float det = (e1 * pvec);
-        if (det < 1e-3f) {
-            return false;
-        }
-        float inv_det = 1.00f / det;
-        Vec3f tvec = r.origin - x;
-        float u = (tvec * pvec) * inv_det;
-        if (u < 0.00f || u > 1.00f) {
-            return false;
-        }
-        Vec3f qvec = cross(tvec, e1);
-        float v = (r.direction * qvec) * inv_det;
-        if (v < 0.00f || u + v > 1.00f) {
-            return false;
-        }
-        distance = (e2 * qvec) * inv_det;
-        return distance > 1e-3f;
-    }
 };
 
 bool triangle_intersection(const Ray &r, const Vec3f &x, const Vec3f &y,
@@ -178,8 +160,6 @@ struct Model
                 bounds[1].z = z;
             }
         }
-        std::cout << bounds[0].x << " " << bounds[0].y << " " << bounds[0].z << std::endl;
-        std::cout << bounds[1].x << " " << bounds[1].y << " " << bounds[1].z << std::endl;
     }
     bool intersection(const Ray &r) const {
         float tmin, tmax, tymin, tymax, tzmin, tzmax;
@@ -248,17 +228,6 @@ bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
             }
     }
 
-    float triangles_dist = std::numeric_limits<float>::max();
-    for (const auto & triangle : triangles) {
-        float dist_i;
-        if (triangle.intersection(r, dist_i) && dist_i < triangles_dist) {
-            triangles_dist = dist_i;
-            hit = orig + dir * dist_i;
-            N = cross(triangle.x - triangle.y, triangle.y - triangle.z);
-            material = triangle.material;
-        }
-    }
-
     float model_distance = 100000.f;
     for (const auto &model: models) {
         if (model.intersection(r)) {
@@ -289,17 +258,17 @@ bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
         float d = -(orig.y + 4) / dir.y; // the checkerboard plane has equation y = -4
         Vec3f pt = orig + dir * d;
         if (d > 0 && fabs(pt.x) < 10000 && pt.z < 10000 && pt.z > -10000 &&
-                d < spheres_dist && d < model_distance && d < triangles_dist) {
+                d < spheres_dist && d < model_distance) {
             checkerboard_dist = d;
             hit = pt;
             N = Vec3f(0,1,0);
             material = (int(0.25 * hit.x + 1000) + int(0.25 * hit.z)) & 1 ?
-                       Material(1.5, Vec4f(0.4,0.1,1.0,2.), Vec3f(0., 0., 0.),1500.) :
-                       Material(1.5, Vec4f(0.4,0.1,1.0,2.), Vec3f(1., 204./255., 204./255.),1500.);
+                       Material(1.5, Vec4f(0.4,0.1,.8,1.5), Vec3f(0., 0., 0.),100.) :
+                       Material(1.5, Vec4f(0.4,0.1,.8,1.5), Vec3f(1., 204./255., 204./255.),100.);
 
         }
     }
-    return std::min(spheres_dist, std::min(checkerboard_dist, std::min(model_distance, triangles_dist)))<1000;
+    return std::min(spheres_dist, std::min(checkerboard_dist, model_distance)) < 1000;
 }
 
 
@@ -307,8 +276,60 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
     auto dir = r.direction;
     Vec3f point, N;
     Material material;
+    auto x = dir.x;
+    auto y = dir.y;
+    auto z = dir.z;
     if (depth > 3 || !scene_intersect(r, point, N, material)) {
-        return Vec3f(0, 0, 0); // background color
+        float max = std::max(std::max(fabsf(x), fabsf(y)), fabsf(z));
+        if (fabsf(x) == max) {
+            y /= max;
+            z /= max;
+            if (x < 0.00f) {
+                uint32_t u = uint32_t(cubemap_width * ((-z * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((-y * 0.50f) + 0.50f));
+                return Vec3f(cubemap_neg_x_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels],
+                                 cubemap_neg_x_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_neg_x_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels + 2]) * (1 / 255.99f);
+            } else {
+                uint32_t u = uint32_t(cubemap_width * ((-z * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((-y * 0.50f) + 0.50f));
+                return Vec3f(cubemap_pos_x_raw[(u + v * cubemap_width) * cubemap_channels],
+                                 cubemap_pos_x_raw[(u + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_pos_x_raw[(u + v * cubemap_width) * cubemap_channels + 2])* (1 / 255.99f);
+            }
+        } else if (fabsf(y) == max) {
+            x /= max;
+            z /= max;
+            if (y < 0.00f) {
+                uint32_t u = uint32_t(cubemap_width * ((x * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((-z * 0.50f) + 0.50f));
+                return Vec3f(cubemap_neg_y_raw[(u + v * cubemap_width) * cubemap_channels],
+                                 cubemap_neg_y_raw[(u + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_neg_y_raw[(u + v * cubemap_width) * cubemap_channels + 2]) * (1 / 255.99f);
+            } else {
+                uint32_t u = uint32_t(cubemap_width * ((x * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((z * 0.50f) + 0.50f));
+                return Vec3f(cubemap_pos_y_raw[(u + v * cubemap_width) * cubemap_channels],
+                                 cubemap_pos_y_raw[(u + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_pos_y_raw[(u + v * cubemap_width) * cubemap_channels + 2]) * (1 / 255.99f);
+            }
+        } else {
+            x /= max;
+            y /= max;
+            if (z < 0.00f) {
+                uint32_t u = uint32_t(cubemap_width * ((-x * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((-y * 0.50f) + 0.50f));
+                return Vec3f(cubemap_neg_z_raw[(u + v * cubemap_width) * cubemap_channels],
+                                 cubemap_neg_z_raw[(u + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_neg_z_raw[(u + v * cubemap_width) * cubemap_channels + 2]) * (1 / 255.99f);
+            } else {
+                uint32_t u = uint32_t(cubemap_width * ((-x * 0.50f) + 0.50f));
+                uint32_t v = uint32_t(cubemap_height * ((-y * 0.50f) + 0.50f));
+                return Vec3f(cubemap_pos_z_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels],
+                                 cubemap_pos_z_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels + 1],
+                                 cubemap_pos_z_raw[((cubemap_width - u) + v * cubemap_width) * cubemap_channels + 2]) * (1 / 255.99f);
+            }
+        }
     }
     Vec3f reflect_dir = reflect(dir, N).normalize();
     Vec3f refract_dir = refract(dir, N, material.refractive_index).normalize();
@@ -343,28 +364,43 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
 void render() {
     const int width = 512;
     const int height = 512;
-    const int fov = M_PI / 3.; // viewing angle
+    const int fov = M_PI / 2.; // viewing angle
     std::vector<Vec3f> framebuffer(width * height);
     Vec3f orig = {0, 0, 0};
-    boost::progress_display show_progress(framebuffer.size());
+    boost::progress_display show_progress(framebuffer.size() * RAYS_PER_PIXEL);
     float jitter[8] = {
             -0.25f,  0.75f,
             0.75f,  0.25f,
             -0.75f, -0.25f,
             0.25f, -0.75f,
     };
-
 #pragma omp parallel for
-    for (size_t j = 0; j < height; j++) {
-        for (size_t i = 0; i < width; i++) {
-            float dir_x =  (i + 0.5) -  width / 2.;
-            float dir_y = -(j + 0.5) + height / 2.;    // this flips the image at the same time
-            float dir_z = -height / (2. * tan(fov / 2.));
-            Vec3f dir = Vec3f(dir_x, dir_y, dir_z).normalize();
-            framebuffer[i + j * width] = cast_ray(Ray(orig, dir));
-            ++show_progress;
+    for (uint32_t j = 0; j < height; ++j) {
+        for (uint32_t i = 0; i < width; ++i) {
+            framebuffer[i + j * width] = Vec3f(0, 0, 0);
+            for (uint32_t k = 0; k < RAYS_PER_PIXEL; ++k) {
+                float dir_x =  (i + 0.5 + jitter[2 * k]) -  width / 2.;
+                float dir_y = -(j + 0.5 + jitter[2 * k + 1]) + height / 2.;
+                float dir_z = -height / (2. * tan(fov / 2.));
+                framebuffer[i + j * width] = framebuffer[i + j * width] +
+                        cast_ray(Ray(orig, Vec3f(dir_x, dir_y, dir_z))) * (1 / float(RAYS_PER_PIXEL));
+                ++show_progress;
+            }
         }
     }
+
+    //float x0 = (2.00f * (i + 0.50f + jitter[2 * i]) / width - 1) * tan(fov / 2.00f) * width / height;
+    //float y0 = -(2.00f * (j + 0.50f + jitter[2 * i + 1]) / height - 1) * tan(fov / 2.00f);
+//    for (size_t j = 0; j < height; j++) {
+//        for (size_t i = 0; i < width; i++) {
+//            float dir_x =  (i + 0.5) -  width / 2.;
+//            float dir_y = -(j + 0.5) + height / 2.;    // this flips the image at the same time
+//            float dir_z = -height / (2. * tan(fov / 2.));
+//            Vec3f dir = Vec3f(dir_x, dir_y, dir_z).normalize();
+//            framebuffer[i + j * width] = cast_ray(Ray(orig, dir));
+//            ++show_progress;
+//        }
+//    }
 
     std::ofstream ofs; // save the framebuffer to file
     ofs.open("../out.ppm");
@@ -381,16 +417,22 @@ void render() {
 }
 
 int main() {
-    Material pink_ivory(1.0, Vec4f(0.6,0.3,0.1,0.0),Vec3f(191./255.,75./255., 129./255.),50.);
-    Material glass(1.5, Vec4f(0.0,0.5,0.1,0.8),Vec3f(0.6,0.7, 0.8),125.);
-    Material red_rubber(1.0, Vec4f(0.9,0.1,0.0,0.0),Vec3f(100./255.,10./255., 70./255.),10.);
-    Material yellow_ivory(1.0, Vec4f(0.6,0.3,0.1,0.0),Vec3f(0.5, 0.4, 0.4),50.);
+    cubemap_neg_x_raw = stbi_load("../Cubemaps/2/nx.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_neg_y_raw = stbi_load("../Cubemaps/2/ny.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_neg_z_raw = stbi_load("../Cubemaps/2/nz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_x_raw = stbi_load("../Cubemaps/2/px.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_y_raw = stbi_load("../Cubemaps/2/py.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_z_raw = stbi_load("../Cubemaps/2/pz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    Material pink_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(191./255., 75./255.,  129./255.), 50.);
+    Material glass(1.5, Vec4f(0.0, 0.5, 0.1, 0.8),Vec3f(0.6, 0.7, 0.8), 125.);
+    Material red_rubber(1.0, Vec4f(0.9, 0.1, 0.0, 0.0),Vec3f(100./255., 10./255., 70./255.), 10.);
+    Material yellow_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(0.5, 0.4, 0.4), 50.);
 
-    models.emplace_back("../teapot_2k_faces.obj", yellow_ivory, Vec3f(0, -4, -16));
+    models.emplace_back("../teapot_2k_faces.obj", yellow_ivory, Vec3f(1, -4, -16));
 
-    spheres.emplace_back(Vec3f(-4,-2,-15),2, pink_ivory);
-    spheres.emplace_back(Vec3f(-1, -3,-11),1, glass);
-    spheres.emplace_back(Vec3f( 6,-2.5,-18),1.5, red_rubber);
+    spheres.emplace_back(Vec3f(-4, -2.5, -15), 1.5, pink_ivory);
+    spheres.emplace_back(Vec3f(-2, -3, -11),1, glass);
+    spheres.emplace_back(Vec3f(6, -3, -16),1, red_rubber);
 
     lights.emplace_back(Vec3f(-30, 30, 10), 1.0);
     lights.emplace_back(Vec3f(-20, 40, 5), 1.2);
