@@ -1,3 +1,3 @@
-/Users/anastasiabogatenkova/CLionProjects/Ray tracing/cmake-build-debug/CMakeFiles/rebuild_cache.dir
-/Users/anastasiabogatenkova/CLionProjects/Ray tracing/cmake-build-debug/CMakeFiles/edit_cache.dir
-/Users/anastasiabogatenkova/CLionProjects/Ray tracing/cmake-build-debug/CMakeFiles/untitled.dir
+/Users/anastasiabogatenkova/CLionProjects/Computer graphics/Ray tracing/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/Users/anastasiabogatenkova/CLionProjects/Computer graphics/Ray tracing/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/anastasiabogatenkova/CLionProjects/Computer graphics/Ray tracing/cmake-build-debug/CMakeFiles/untitled.dir

@@ -3,6 +3,7 @@
 
 CMakeFiles/untitled.dir/main.cpp.o: ../geometry.h
 CMakeFiles/untitled.dir/main.cpp.o: ../main.cpp
+CMakeFiles/untitled.dir/main.cpp.o: ../stb_image.h
 CMakeFiles/untitled.dir/main.cpp.o: ../tiny_obj_loader.h
 CMakeFiles/untitled.dir/main.cpp.o: /usr/local/Cellar/boost/1.72.0/include/boost/config.hpp
 CMakeFiles/untitled.dir/main.cpp.o: /usr/local/Cellar/boost/1.72.0/include/boost/config/compiler/borland.hpp

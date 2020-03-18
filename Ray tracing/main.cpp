@@ -1,4 +1,5 @@
 #define TINYOBJLOADER_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
 
 #include "tiny_obj_loader.h"
 
@@ -8,6 +9,7 @@
 #include <iostream>
 #include <vector>
 #include "geometry.h"
+#include "stb_image.h"
 
 struct Light {
     Light(const Vec3f &p, const float &i) : position(p), intensity(i) {}
@@ -139,7 +141,7 @@ struct Model
     std::vector<Triangle> triangles;
     tinyobj::attrib_t attrib;
     Model() = default;
-    Model(const char *s, const Material &m): material(m) {
+    Model(const char *s, const Material &m, const Vec3f &shift): material(m) {
         bool ret = tinyobj::LoadObj(&attrib, &shapes,
                 &materials, &warn, &err, s, nullptr,
                 true,true);
@@ -148,34 +150,36 @@ struct Model
             std::cout << err << std::endl;
             return;
         }
-        bounds[0] = Vec3f(-1000.f, -1000.f, -1000.f);
-        bounds[1] = Vec3f(1000.f, 1000.f, 1000.f);
-        for (const auto &s: shapes) {
-            for (uint32_t f = 0; f < s.mesh.num_face_vertices.size(); ++f) {
-                Vec3f v(attrib.vertices[3 * s.mesh.indices[f].vertex_index],
-                            attrib.vertices[3 * s.mesh.indices[f].vertex_index + 1],
-                            attrib.vertices[3 * s.mesh.indices[f].vertex_index + 2]);
-                //bounding box for the figure
-                if (v.x < bounds[0].x) {
-                    bounds[0].x = v.x;
-                }
-                if (v.x > bounds[1].x) {
-                    bounds[1].x = v.x;
-                }
-                if (v.y < bounds[0].y) {
-                    bounds[0].y = v.y;
-                }
-                if (v.y > bounds[1].y) {
-                    bounds[1].y = v.y;
-                }
-                if (v.z < bounds[0].z) {
-                    bounds[0].z = v.z;
-                }
-                if (v.z > bounds[1].z) {
-                    bounds[1].z = v.z;
-                }
+        bounds[0] = Vec3f(1000.f, 1000.f, 1000.f);
+        bounds[1] = Vec3f(-1000.f, -1000.f, -1000.f);
+        for (uint32_t i = 0; i < attrib.vertices.size(); i += 3) {
+            attrib.vertices[i] += shift.x;
+            attrib.vertices[i + 1] += shift.y;
+            attrib.vertices[i + 2] += shift.z;
+            float x = attrib.vertices[i];
+            float y = attrib.vertices[i + 1];
+            float z = attrib.vertices[i + 2];
+            if (x < bounds[0].x) {
+                bounds[0].x = x;
+            }
+            if (x > bounds[1].x) {
+                bounds[1].x = x;
+            }
+            if (y < bounds[0].y) {
+                bounds[0].y = y;
+            }
+            if (y > bounds[1].y) {
+                bounds[1].y = y;
+            }
+            if (z < bounds[0].z) {
+                bounds[0].z = z;
+            }
+            if (z > bounds[1].z) {
+                bounds[1].z = z;
             }
         }
+        std::cout << bounds[0].x << " " << bounds[0].y << " " << bounds[0].z << std::endl;
+        std::cout << bounds[1].x << " " << bounds[1].y << " " << bounds[1].z << std::endl;
     }
     bool intersection(const Ray &r) const {
         float tmin, tmax, tymin, tymax, tzmin, tzmax;
@@ -204,8 +208,8 @@ struct Model
 
 std::vector<struct Model> models;
 std::vector<Sphere> spheres;
-std::vector<Light>  lights;
-
+std::vector<Light> lights;
+std::vector<Triangle> triangles;
 
 // R = 2 * N * <N, L> - L
 Vec3f reflect(const Vec3f &I, const Vec3f &N) {
@@ -230,8 +234,7 @@ Vec3f refract(const Vec3f &I, const Vec3f &N,
 // N - normal vector
 // hit - intersection point
 // N = hit - center / |hit - center|
-bool scene_intersect(const Ray &r, const std::vector<Sphere> &spheres,
-        Vec3f &hit, Vec3f &N, Material &material) {
+bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
     auto orig = r.origin;
     auto dir = r.direction;
     float spheres_dist = std::numeric_limits<float>::max();
@@ -243,6 +246,17 @@ bool scene_intersect(const Ray &r, const std::vector<Sphere> &spheres,
                 N = (hit - sphere.center).normalize();
                 material = sphere.material;
             }
+    }
+
+    float triangles_dist = std::numeric_limits<float>::max();
+    for (const auto & triangle : triangles) {
+        float dist_i;
+        if (triangle.intersection(r, dist_i) && dist_i < triangles_dist) {
+            triangles_dist = dist_i;
+            hit = orig + dir * dist_i;
+            N = cross(triangle.x - triangle.y, triangle.y - triangle.z);
+            material = triangle.material;
+        }
     }
 
     float model_distance = 100000.f;
@@ -269,21 +283,23 @@ bool scene_intersect(const Ray &r, const std::vector<Sphere> &spheres,
             }
         }
     }
+
     float checkerboard_dist = std::numeric_limits<float>::max();
     if (fabs(dir.y) > 1e-3)  {
         float d = -(orig.y + 4) / dir.y; // the checkerboard plane has equation y = -4
         Vec3f pt = orig + dir * d;
         if (d > 0 && fabs(pt.x) < 10000 && pt.z < 10000 && pt.z > -10000 &&
-                d < spheres_dist && d < model_distance) {
+                d < spheres_dist && d < model_distance && d < triangles_dist) {
             checkerboard_dist = d;
             hit = pt;
             N = Vec3f(0,1,0);
-            material.diffuse_color = (int(.5 * hit.x + 1000) + int(.5 * hit.z)) & 1 ?
-                    Vec3f(.3, .3, .3) : Vec3f(.3, .2, .1);
+            material = (int(0.25 * hit.x + 1000) + int(0.25 * hit.z)) & 1 ?
+                       Material(1.5, Vec4f(0.4,0.1,1.0,2.), Vec3f(0., 0., 0.),1500.) :
+                       Material(1.5, Vec4f(0.4,0.1,1.0,2.), Vec3f(1., 204./255., 204./255.),1500.);
 
         }
     }
-    return std::min(spheres_dist, checkerboard_dist)<1000;
+    return std::min(spheres_dist, std::min(checkerboard_dist, std::min(model_distance, triangles_dist)))<1000;
 }
 
 
@@ -291,8 +307,8 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
     auto dir = r.direction;
     Vec3f point, N;
     Material material;
-    if (depth > 3 || !scene_intersect(r, spheres, point, N, material)) {
-        return Vec3f(0.5, 0.7, 0.3 ); // background color
+    if (depth > 3 || !scene_intersect(r, point, N, material)) {
+        return Vec3f(0, 0, 0); // background color
     }
     Vec3f reflect_dir = reflect(dir, N).normalize();
     Vec3f refract_dir = refract(dir, N, material.refractive_index).normalize();
@@ -310,7 +326,7 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
         Vec3f shadow_orig = light_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3; // small shift of the point
         Vec3f shadow_pt, shadow_N;
         Material tmp_material;
-        if (scene_intersect(Ray(shadow_orig, light_dir), spheres, shadow_pt, shadow_N, tmp_material) \
+        if (scene_intersect(Ray(shadow_orig, light_dir), shadow_pt, shadow_N, tmp_material) \
         && (shadow_pt - shadow_orig).norm() < light_distance)
             continue;
         diffuse_light_intensity += light.intensity * std::max(0.f, light_dir * N);
@@ -365,20 +381,19 @@ void render() {
 }
 
 int main() {
-    Material      ivory(1.0, Vec4f(0.6,  0.3, 0.1, 0.0), Vec3f(0.4, 0.4, 0.3),   50.);
-    Material      glass(1.5, Vec4f(0.0,  0.5, 0.1, 0.8), Vec3f(0.6, 0.7, 0.8),  125.);
-    Material red_rubber(1.0, Vec4f(0.9,  0.1, 0.0, 0.0), Vec3f(0.3, 0.1, 0.1),   10.);
-    Material     mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425.);
+    Material pink_ivory(1.0, Vec4f(0.6,0.3,0.1,0.0),Vec3f(191./255.,75./255., 129./255.),50.);
+    Material glass(1.5, Vec4f(0.0,0.5,0.1,0.8),Vec3f(0.6,0.7, 0.8),125.);
+    Material red_rubber(1.0, Vec4f(0.9,0.1,0.0,0.0),Vec3f(100./255.,10./255., 70./255.),10.);
+    Material yellow_ivory(1.0, Vec4f(0.6,0.3,0.1,0.0),Vec3f(0.5, 0.4, 0.4),50.);
 
-    //models.emplace_back("../torus.obj", mirror);
-    spheres.emplace_back(Vec3f(-3,    0,   -16), 2, ivory);
-    spheres.emplace_back(Vec3f(-1.0, -1.5, -12), 1, glass);
-    spheres.emplace_back(Vec3f( 1.5, -0.5, -18), 3, red_rubber);
-    spheres.emplace_back(Vec3f( 6,    4,   -18), 2, mirror);
+    models.emplace_back("../teapot_2k_faces.obj", yellow_ivory, Vec3f(0, -4, -16));
 
-    lights.emplace_back(Vec3f(-20, 20,  20), 1.5);
-    lights.emplace_back(Vec3f( 30, 50, -25), 1.8);
-    //lights.emplace_back(Vec3f( 30, 20,  30), 1.7);
+    spheres.emplace_back(Vec3f(-4,-2,-15),2, pink_ivory);
+    spheres.emplace_back(Vec3f(-1, -3,-11),1, glass);
+    spheres.emplace_back(Vec3f( 6,-2.5,-18),1.5, red_rubber);
+
+    lights.emplace_back(Vec3f(-30, 30, 10), 1.0);
+    lights.emplace_back(Vec3f(-20, 40, 5), 1.2);
 
     render();
     return 0;
