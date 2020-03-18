@@ -23,9 +23,9 @@ struct Light {
 
 struct Material {
     Material(const float &r, const Vec4f &a,
-            const Vec3f &color, const float &spec) : refractive_index(r), \
+            const Vec3f &color, const float &spec) : refractive_index(r),
     albedo(a), diffuse_color(color), specular_exponent(spec) {}
-    Material() : refractive_index(1), albedo(1,0,0,0), \
+    Material() : refractive_index(1), albedo(1,0,0,0),
             diffuse_color(), specular_exponent() {}
     float refractive_index;
     Vec4f albedo;
@@ -263,8 +263,8 @@ bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
             hit = pt;
             N = Vec3f(0,1,0);
             material = (int(0.25 * hit.x + 1000) + int(0.25 * hit.z)) & 1 ?
-                       Material(1.5, Vec4f(0.4,0.1,.8,1.5), Vec3f(0., 0., 0.),100.) :
-                       Material(1.5, Vec4f(0.4,0.1,.8,1.5), Vec3f(1., 204./255., 204./255.),100.);
+                       Material(1.5, Vec4f(0.4, 0.1, 0.8, 1.5), Vec3f(0.,  0., 0.), 100.) :
+                       Material(1.5, Vec4f(0.4, 0.1, 0.8, 1.5), Vec3f(1., 204./255., 204./255.), 100.);
 
         }
     }
@@ -389,19 +389,6 @@ void render() {
         }
     }
 
-    //float x0 = (2.00f * (i + 0.50f + jitter[2 * i]) / width - 1) * tan(fov / 2.00f) * width / height;
-    //float y0 = -(2.00f * (j + 0.50f + jitter[2 * i + 1]) / height - 1) * tan(fov / 2.00f);
-//    for (size_t j = 0; j < height; j++) {
-//        for (size_t i = 0; i < width; i++) {
-//            float dir_x =  (i + 0.5) -  width / 2.;
-//            float dir_y = -(j + 0.5) + height / 2.;    // this flips the image at the same time
-//            float dir_z = -height / (2. * tan(fov / 2.));
-//            Vec3f dir = Vec3f(dir_x, dir_y, dir_z).normalize();
-//            framebuffer[i + j * width] = cast_ray(Ray(orig, dir));
-//            ++show_progress;
-//        }
-//    }
-
     std::ofstream ofs; // save the framebuffer to file
     ofs.open("../out.ppm");
     ofs << "P6\n" << width << " " << height << "\n255\n";
@@ -417,22 +404,24 @@ void render() {
 }
 
 int main() {
-    cubemap_neg_x_raw = stbi_load("../Cubemaps/2/nx.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
-    cubemap_neg_y_raw = stbi_load("../Cubemaps/2/ny.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
-    cubemap_neg_z_raw = stbi_load("../Cubemaps/2/nz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
-    cubemap_pos_x_raw = stbi_load("../Cubemaps/2/px.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
-    cubemap_pos_y_raw = stbi_load("../Cubemaps/2/py.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
-    cubemap_pos_z_raw = stbi_load("../Cubemaps/2/pz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_neg_x_raw = stbi_load("../Cubemap/nx.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_neg_y_raw = stbi_load("../Cubemap/ny.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_neg_z_raw = stbi_load("../Cubemap/nz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_x_raw = stbi_load("../Cubemap/px.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_y_raw = stbi_load("../Cubemap/py.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+    cubemap_pos_z_raw = stbi_load("../Cubemap/pz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     Material pink_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(191./255., 75./255.,  129./255.), 50.);
     Material glass(1.5, Vec4f(0.0, 0.5, 0.1, 0.8),Vec3f(0.6, 0.7, 0.8), 125.);
-    Material red_rubber(1.0, Vec4f(0.9, 0.1, 0.0, 0.0),Vec3f(100./255., 10./255., 70./255.), 10.);
-    Material yellow_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(0.5, 0.4, 0.4), 50.);
+    Material pink_rubber(1.0, Vec4f(0.9, 0.1, 0.0, 0.0),Vec3f(100./255., 10./255., 70./255.), 10.);
+    Material white_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(0.7, 0.5, 0.6), 50.);
+    Material mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425.);
 
-    models.emplace_back("../teapot_2k_faces.obj", yellow_ivory, Vec3f(1, -4, -16));
+    models.emplace_back("../teapot_2k_faces.obj", white_ivory, Vec3f(1, -4, -16));
 
     spheres.emplace_back(Vec3f(-4, -2.5, -15), 1.5, pink_ivory);
     spheres.emplace_back(Vec3f(-2, -3, -11),1, glass);
-    spheres.emplace_back(Vec3f(6, -3, -16),1, red_rubber);
+    spheres.emplace_back(Vec3f(6, -3, -16),1, pink_rubber);
+    spheres.emplace_back(Vec3f( 5,    2,   -16), 2, mirror);
 
     lights.emplace_back(Vec3f(-30, 30, 10), 1.0);
     lights.emplace_back(Vec3f(-20, 40, 5), 1.2);
