@@ -1,5 +1,19 @@
 ## Задание 1: Трассировка лучей Whitted-а
 
+### Сборка: 
+
+mkdir build
+
+cd build
+
+cmake -DCMAKE\_BUILD\_TYPE=Release ..
+
+make -j 4
+
+### Запуск: 
+
+./ rt −out <output_path> −scene <scene_number> −threads <threads>
+
 ### Базовая часть: 15 баллов
 
 * Освещение по модели фонга;
