@@ -1,19 +1,20 @@
+#include "/usr/local/opt/libomp/include/omp.h"
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include "geometry.h"
+#include "stb_image.h"
+#include "tiny_obj_loader.h"
+
 #define TINYOBJLOADER_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #define RAYS_PER_PIXEL 4
-
-#include "tiny_obj_loader.h"
-
-#include <boost/progress.hpp>
-#include <limits>
-#include <cmath>
-#include <iostream>
-#include <vector>
-#include "geometry.h"
-#include "stb_image.h"
+#define MAX 10000
 
 int32_t cubemap_width, cubemap_height, cubemap_channels;
 uint8_t *cubemap_neg_x_raw, *cubemap_neg_y_raw, *cubemap_neg_z_raw, *cubemap_pos_x_raw, *cubemap_pos_y_raw, *cubemap_pos_z_raw;
+std::string output_path;
+int scene_number, threads;
 
 struct Light {
     Light(const Vec3f &p, const float &i) : position(p), intensity(i) {}
@@ -25,7 +26,7 @@ struct Material {
     Material(const float &r, const Vec4f &a,
             const Vec3f &color, const float &spec) : refractive_index(r),
     albedo(a), diffuse_color(color), specular_exponent(spec) {}
-    Material() : refractive_index(1), albedo(1,0,0,0),
+    Material() : refractive_index(1), albedo(1, 0, 0, 0),
             diffuse_color(), specular_exponent() {}
     float refractive_index;
     Vec4f albedo;
@@ -33,8 +34,7 @@ struct Material {
     float specular_exponent;
 };
 
-struct Ray
-{
+struct Ray {
     Vec3f origin;
     Vec3f direction;
     Vec3f inverse_direction;
@@ -53,15 +53,13 @@ struct Sphere {
     Vec3f center;
     float radius;
     Material material;
-
     Sphere(const Vec3f &c, const float &r,
             const Material &m) : center(c), radius(r), material(m) {}
-
     // D = direction, norm(D) = 1
     // orig - camera point
     // t_1, t_2 = <L, D> +- sqrt(<L, D>^2 - <L, L> + r^2)
     // returns true if ray intersect sphere (+ intersect point), else returns false
-    bool ray_intersect(const Ray &r, float &intersect_point) const {
+    bool sphere_intersection(const Ray &r, float &intersect_point) const {
         auto orig = r.origin;
         auto direction = r.direction;
         Vec3f L = center - orig;
@@ -79,14 +77,6 @@ struct Sphere {
             return true;
         }
     }
-};
-
-struct Triangle
-{
-    Vec3f x, y, z;
-    Material material;
-    Triangle (const Vec3f &x, const Vec3f &y, const Vec3f &z,
-            const Material &m): x(x), y(y), z(z), material(m) {}
 };
 
 bool triangle_intersection(const Ray &r, const Vec3f &x, const Vec3f &y,
@@ -113,14 +103,12 @@ bool triangle_intersection(const Ray &r, const Vec3f &x, const Vec3f &y,
     return distance > 1e-3f;
 }
 
-struct Model
-{
+struct Model {
     Vec3f bounds[2];
     Material material;
     std::string err, warn;
     std::vector<tinyobj::material_t> materials;
     std::vector<tinyobj::shape_t> shapes;
-    std::vector<Triangle> triangles;
     tinyobj::attrib_t attrib;
     Model() = default;
     Model(const char *s, const Material &m, const Vec3f &shift): material(m) {
@@ -132,8 +120,8 @@ struct Model
             std::cout << err << std::endl;
             return;
         }
-        bounds[0] = Vec3f(1000.f, 1000.f, 1000.f);
-        bounds[1] = Vec3f(-1000.f, -1000.f, -1000.f);
+        bounds[0] = Vec3f(MAX, MAX, MAX);
+        bounds[1] = Vec3f(-MAX, -MAX, -MAX);
         for (uint32_t i = 0; i < attrib.vertices.size(); i += 3) {
             attrib.vertices[i] += shift.x;
             attrib.vertices[i + 1] += shift.y;
@@ -161,14 +149,12 @@ struct Model
             }
         }
     }
-    bool intersection(const Ray &r) const {
+    bool model_intersection(const Ray &r) const {
         float tmin, tmax, tymin, tymax, tzmin, tzmax;
-
         tmin = (bounds[r.sign[0]].x - r.origin.x) * r.inverse_direction.x;
         tmax = (bounds[1 - r.sign[0]].x - r.origin.x) * r.inverse_direction.x;
         tymin = (bounds[r.sign[1]].y - r.origin.y) * r.inverse_direction.y;
         tymax = (bounds[1 - r.sign[1]].y - r.origin.y) * r.inverse_direction.y;
-
         if ((tmin > tymax) || (tymin > tmax)) {
             return false;
         }
@@ -178,10 +164,8 @@ struct Model
         if (tymax < tmax) {
             tmax = tymax;
         }
-
         tzmin = (bounds[r.sign[2]].z - r.origin.z) * r.inverse_direction.z;
         tzmax = (bounds[1 - r.sign[2]].z - r.origin.z) * r.inverse_direction.z;
-
         return !((tmin > tzmax) || (tzmin > tmax));
     }
 };
@@ -189,9 +173,7 @@ struct Model
 std::vector<struct Model> models;
 std::vector<Sphere> spheres;
 std::vector<Light> lights;
-std::vector<Triangle> triangles;
 
-// R = 2 * N * <N, L> - L
 Vec3f reflect(const Vec3f &I, const Vec3f &N) {
     return  I - N * 2.f * (I * N);
 }
@@ -209,18 +191,18 @@ Vec3f refract(const Vec3f &I, const Vec3f &N,
     return k < 0 ? Vec3f(1,0,0) : I * eta + N * (eta * cosi - sqrtf(k));
 }
 
-// D = direction, norm(D) = 1
-// orig - camera point
-// N - normal vector
-// hit - intersection point
-// N = hit - center / |hit - center|
 bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
     auto orig = r.origin;
     auto dir = r.direction;
-    float spheres_dist = std::numeric_limits<float>::max();
+    float spheres_dist = MAX;
+    // dir = direction, norm(dir) = 1
+    // orig - camera point
+    // N - normal vector
+    // hit - intersection point
+    // N = hit - center / |hit - center|
     for (const auto & sphere : spheres) {
             float dist_i;
-            if (sphere.ray_intersect(r, dist_i) && dist_i < spheres_dist) {
+            if (sphere.sphere_intersection(r, dist_i) && dist_i < spheres_dist) {
                 spheres_dist = dist_i;
                 hit = orig + dir * dist_i;
                 N = (hit - sphere.center).normalize();
@@ -228,9 +210,9 @@ bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
             }
     }
 
-    float model_distance = 100000.f;
+    float model_distance = MAX;
     for (const auto &model: models) {
-        if (model.intersection(r)) {
+        if (model.model_intersection(r)) {
             for (uint32_t f = 0, offset = 0; f < model.shapes[0].mesh.num_face_vertices.size(); ++f, offset += 3) {
                 float d;
                 Vec3f x(model.attrib.vertices[3 * model.shapes[0].mesh.indices[offset].vertex_index],
@@ -253,7 +235,7 @@ bool scene_intersect(const Ray &r, Vec3f &hit, Vec3f &N, Material &material) {
         }
     }
 
-    float checkerboard_dist = std::numeric_limits<float>::max();
+    float checkerboard_dist = MAX;
     if (fabs(dir.y) > 1e-3)  {
         float d = -(orig.y + 4) / dir.y; // the checkerboard plane has equation y = -4
         Vec3f pt = orig + dir * d;
@@ -367,14 +349,13 @@ void render() {
     const int fov = M_PI / 2.; // viewing angle
     std::vector<Vec3f> framebuffer(width * height);
     Vec3f orig = {0, 0, 0};
-    boost::progress_display show_progress(framebuffer.size() * RAYS_PER_PIXEL);
     float jitter[8] = {
-            -0.25f,  0.75f,
-            0.75f,  0.25f,
+            -0.25f, 0.75f,
+            0.75f, 0.25f,
             -0.75f, -0.25f,
             0.25f, -0.75f,
     };
-#pragma omp parallel for
+#pragma omp parallel for num_threads(threads)
     for (uint32_t j = 0; j < height; ++j) {
         for (uint32_t i = 0; i < width; ++i) {
             framebuffer[i + j * width] = Vec3f(0, 0, 0);
@@ -384,13 +365,12 @@ void render() {
                 float dir_z = -height / (2. * tan(fov / 2.));
                 framebuffer[i + j * width] = framebuffer[i + j * width] +
                         cast_ray(Ray(orig, Vec3f(dir_x, dir_y, dir_z))) * (1 / float(RAYS_PER_PIXEL));
-                ++show_progress;
             }
         }
     }
 
     std::ofstream ofs; // save the framebuffer to file
-    ofs.open("../out.ppm");
+    ofs.open("../" + output_path);
     ofs << "P6\n" << width << " " << height << "\n255\n";
     for (size_t i = 0; i < height * width; ++i) {
         Vec3f &c = framebuffer[i];
@@ -403,29 +383,61 @@ void render() {
     ofs.close();
 }
 
-int main() {
+//./ rt −out <output_path> −scene <scene_number> −threads <threads>
+int main(int argc, char **argv) {
+    // parsing command line arguments
+    if (argc != 7) {
+        return 0;
+    }
+    if (std::string(argv[1]) == "-out") {
+        output_path = argv[2];
+    } else {
+        return 0;
+    }
+    if (std::string(argv[3]) == "-scene") {
+        scene_number = atoi(argv[4]);
+    } else {
+        return 0;
+    }
+    if (scene_number < 1 || scene_number > 2) {
+        return 0;
+    }
+    if (std::string(argv[5]) == "-threads") {
+        threads = atoi(argv[6]);
+    } else {
+        return 0;
+    }
+
     cubemap_neg_x_raw = stbi_load("../Cubemap/nx.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     cubemap_neg_y_raw = stbi_load("../Cubemap/ny.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     cubemap_neg_z_raw = stbi_load("../Cubemap/nz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     cubemap_pos_x_raw = stbi_load("../Cubemap/px.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     cubemap_pos_y_raw = stbi_load("../Cubemap/py.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
     cubemap_pos_z_raw = stbi_load("../Cubemap/pz.png", &cubemap_width, &cubemap_height, &cubemap_channels, 0);
+
     Material pink_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(191./255., 75./255.,  129./255.), 50.);
     Material glass(1.5, Vec4f(0.0, 0.5, 0.1, 0.8),Vec3f(0.6, 0.7, 0.8), 125.);
     Material pink_rubber(1.0, Vec4f(0.9, 0.1, 0.0, 0.0),Vec3f(100./255., 10./255., 70./255.), 10.);
     Material white_ivory(1.0, Vec4f(0.6, 0.3, 0.1, 0.0),Vec3f(0.7, 0.5, 0.6), 50.);
     Material mirror(1.0, Vec4f(0.0, 10.0, 0.8, 0.0), Vec3f(1.0, 1.0, 1.0), 1425.);
 
-    models.emplace_back("../teapot_2k_faces.obj", white_ivory, Vec3f(1, -4, -16));
+    if (scene_number == 1) {
+        spheres.emplace_back(Vec3f(1, -2, -16), 2, mirror);
+    } else {
+        models.emplace_back("../teapot_2k_faces.obj", white_ivory, Vec3f(1, -4, -16));
+        spheres.emplace_back(Vec3f(5, 2, -16), 2, mirror);
+    }
 
     spheres.emplace_back(Vec3f(-4, -2.5, -15), 1.5, pink_ivory);
-    spheres.emplace_back(Vec3f(-2, -3, -11),1, glass);
-    spheres.emplace_back(Vec3f(6, -3, -16),1, pink_rubber);
-    spheres.emplace_back(Vec3f( 5,    2,   -16), 2, mirror);
+    spheres.emplace_back(Vec3f(-2, -3, -11), 1, glass);
+    spheres.emplace_back(Vec3f(6, -3, -16), 1, pink_rubber);
 
     lights.emplace_back(Vec3f(-30, 30, 10), 1.0);
     lights.emplace_back(Vec3f(-20, 40, 5), 1.2);
 
+    double start_time = omp_get_wtime();
     render();
+    double end_time = omp_get_wtime();
+    std::cout << "Rendering time: " << end_time - start_time << std::endl;
     return 0;
 }
