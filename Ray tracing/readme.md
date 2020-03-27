@@ -6,13 +6,13 @@ mkdir build
 
 cd build
 
-cmake -DCMAKE\_BUILD\_TYPE=Release ..
+cmake -DCMAKE\\_BUILD\\_TYPE=Release ..
 
 make -j 4
 
 ### Запуск: 
 
-./ rt −out <output_path> −scene <scene_number> −threads <threads>
+./ rt −out <output_path> −scene <scene_number> −threads \<threads>
 
 ### Базовая часть: 15 баллов
 
