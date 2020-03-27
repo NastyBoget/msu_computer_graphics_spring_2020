@@ -1,15 +1,15 @@
-#include "/usr/local/opt/libomp/include/omp.h"
+#define TINYOBJLOADER_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define RAYS_PER_PIXEL 4
+#define MAX 10000
+
+#include <omp.h>
 #include <fstream>
 #include <vector>
 #include <cmath>
 #include "geometry.h"
 #include "stb_image.h"
 #include "tiny_obj_loader.h"
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define RAYS_PER_PIXEL 4
-#define MAX 10000
 
 int32_t cubemap_width, cubemap_height, cubemap_channels;
 uint8_t *cubemap_neg_x_raw, *cubemap_neg_y_raw, *cubemap_neg_z_raw, *cubemap_pos_x_raw, *cubemap_pos_y_raw, *cubemap_pos_z_raw;
