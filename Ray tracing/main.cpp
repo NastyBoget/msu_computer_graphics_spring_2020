@@ -10,6 +10,7 @@
 #include "geometry.h"
 #include "stb_image.h"
 #include "tiny_obj_loader.h"
+#include "Bitmap.h"
 
 int32_t cubemap_width, cubemap_height, cubemap_channels;
 uint8_t *cubemap_neg_x_raw, *cubemap_neg_y_raw, *cubemap_neg_z_raw, *cubemap_pos_x_raw, *cubemap_pos_y_raw, *cubemap_pos_z_raw;
@@ -341,6 +342,16 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
     reflect_color * material.albedo[2] + refract_color * material.albedo[3];
 }
 
+uint32_t chr2int(uint8_t r, uint8_t g, uint8_t b) {
+	uint32_t res = 0;
+	res |= b;
+	res <<= 8;
+	res |= g;
+	res <<= 8;
+	res |= r;
+	return res;
+}
+
 // gaze direction, along the z axis, in the direction of minus infinity
 // camera location, Vec3f (0,0,0)
 void render() {
@@ -361,7 +372,7 @@ void render() {
             framebuffer[i + j * width] = Vec3f(0, 0, 0);
             for (uint32_t k = 0; k < RAYS_PER_PIXEL; ++k) {
                 float dir_x =  (i + 0.5 + jitter[2 * k]) -  width / 2.;
-                float dir_y = -(j + 0.5 + jitter[2 * k + 1]) + height / 2.;
+                float dir_y = (j + 0.5 + jitter[2 * k + 1]) - height / 2.;
                 float dir_z = -height / (2. * tan(fov / 2.));
                 framebuffer[i + j * width] = framebuffer[i + j * width] +
                         cast_ray(Ray(orig, Vec3f(dir_x, dir_y, dir_z))) * (1 / float(RAYS_PER_PIXEL));
@@ -369,18 +380,17 @@ void render() {
         }
     }
 
-    std::ofstream ofs; // save the framebuffer to file
-    ofs.open("../" + output_path);
-    ofs << "P6\n" << width << " " << height << "\n255\n";
+    std::string outFilePath = "../" + output_path;
+    std::vector<uint32_t> image(width * height);
     for (size_t i = 0; i < height * width; ++i) {
         Vec3f &c = framebuffer[i];
         float max = std::max(c[0], std::max(c[1], c[2]));
-        if (max>1) c = c * (1. / max);
-        for (size_t j = 0; j < 3; j++) {
-            ofs << (char)(255 * std::max(0.f, std::min(1.f, framebuffer[i][j])));
-        }
+        if (max > 1) c = c * (1. / max);
+        image[i] = chr2int((char)(255 * std::max(0.f, std::min(1.f, framebuffer[i][0]))),
+        (char)(255 * std::max(0.f, std::min(1.f, framebuffer[i][1]))),
+    	(char)(255 * std::max(0.f, std::min(1.f, framebuffer[i][2]))));
     }
-    ofs.close();
+    SaveBMP(outFilePath.c_str(), image.data(), width, height);
 }
 
 //./ rt −out <output_path> −scene <scene_number> −threads <threads>
