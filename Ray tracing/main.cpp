@@ -5,6 +5,8 @@
 
 #include <chrono>
 #include <thread>
+#include <functional>
+#include <algorithm>
 #include <fstream>
 #include <vector>
 #include <cmath>
