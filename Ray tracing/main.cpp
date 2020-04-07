@@ -3,7 +3,8 @@
 #define RAYS_PER_PIXEL 4
 #define MAX 10000
 
-#include <omp.h>
+#include <chrono>
+#include <thread>
 #include <fstream>
 #include <vector>
 #include <cmath>
@@ -15,7 +16,7 @@
 int32_t cubemap_width, cubemap_height, cubemap_channels;
 uint8_t *cubemap_neg_x_raw, *cubemap_neg_y_raw, *cubemap_neg_z_raw, *cubemap_pos_x_raw, *cubemap_pos_y_raw, *cubemap_pos_z_raw;
 std::string output_path;
-int scene_number, threads;
+int scene_number, nthreads;
 
 struct Light {
     Light(const Vec3f &p, const float &i) : position(p), intensity(i) {}
@@ -180,15 +181,13 @@ Vec3f reflect(const Vec3f &I, const Vec3f &N) {
 }
 
 Vec3f refract(const Vec3f &I, const Vec3f &N,
-        const float eta_t, const float eta_i = 1.f) { // Snell's law
+        const float eta_t, const float eta_i = 1.f) {
     float cosi = - std::max(-1.f, std::min(1.f, I * N));
     if (cosi < 0) {
-        // if the ray comes from the inside the object, swap the air and the media
         return refract(I, -N, eta_i, eta_t);
     }
     float eta = eta_i / eta_t;
     float k = 1 - eta * eta * (1 - cosi * cosi);
-    // k<0 = total reflection, no ray to refract. I refract it anyways, this has no physical meaning
     return k < 0 ? Vec3f(1,0,0) : I * eta + N * (eta * cosi - sqrtf(k));
 }
 
@@ -316,7 +315,6 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
     }
     Vec3f reflect_dir = reflect(dir, N).normalize();
     Vec3f refract_dir = refract(dir, N, material.refractive_index).normalize();
-    // offset the original point to avoid occlusion by the object itself
     Vec3f reflect_orig = reflect_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
     Vec3f refract_orig = refract_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
     Vec3f reflect_color = cast_ray(Ray(reflect_orig, reflect_dir), depth + 1);
@@ -326,8 +324,7 @@ Vec3f cast_ray(const Ray &r, size_t depth = 0) {
         // I = sum(I_i * <N, light_dir>)
         Vec3f light_dir = (light.position - point).normalize();
         float light_distance = (light.position - point).norm();
-        // checking if the point lies in the shadow of the lights[i]
-        Vec3f shadow_orig = light_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3; // small shift of the point
+        Vec3f shadow_orig = light_dir * N < 0 ? point - N * 1e-3 : point + N * 1e-3;
         Vec3f shadow_pt, shadow_N;
         Material tmp_material;
         if (scene_intersect(Ray(shadow_orig, light_dir), shadow_pt, shadow_N, tmp_material) \
@@ -366,19 +363,27 @@ void render() {
             -0.75f, -0.25f,
             0.25f, -0.75f,
     };
-#pragma omp parallel for num_threads(threads)
-    for (uint32_t j = 0; j < height; ++j) {
-        for (uint32_t i = 0; i < width; ++i) {
-            framebuffer[i + j * width] = Vec3f(0, 0, 0);
-            for (uint32_t k = 0; k < RAYS_PER_PIXEL; ++k) {
-                float dir_x =  (i + 0.5 + jitter[2 * k]) -  width / 2.;
-                float dir_y = (j + 0.5 + jitter[2 * k + 1]) - height / 2.;
-                float dir_z = -height / (2. * tan(fov / 2.));
-                framebuffer[i + j * width] = framebuffer[i + j * width] +
-                        cast_ray(Ray(orig, Vec3f(dir_x, dir_y, dir_z))) * (1 / float(RAYS_PER_PIXEL));
-            }
-        }
+
+    std::vector<std::thread> threads(nthreads);
+
+    for (auto t = 0; t < nthreads; t++) {
+        threads[t] = std::thread(std::bind(
+            [&](const uint32_t width, const uint32_t left_height, const uint32_t right_height, const int t) {
+                for (uint32_t j = left_height; j < right_height; ++j) {
+                    for (uint32_t i = 0; i < width; ++i) {
+                        framebuffer[i + j * width] = Vec3f(0, 0, 0);
+                        for (uint32_t k = 0; k < RAYS_PER_PIXEL; ++k) {
+                            float dir_x =  (i + 0.5 + jitter[2 * k]) -  width / 2.;
+                            float dir_y = (j + 0.5 + jitter[2 * k + 1]) - height / 2.;
+                            float dir_z = -height / (2. * tan(fov / 2.));
+                            framebuffer[i + j * width] = framebuffer[i + j * width] +
+                                    cast_ray(Ray(orig, Vec3f(dir_x, dir_y, dir_z))) * (1 / float(RAYS_PER_PIXEL));
+                        }
+                    }
+                }
+            }, width, t * height / nthreads, (t + 1) == nthreads ? height : (t + 1) * height / nthreads, t));
     }
+    std::for_each(threads.begin(),threads.end(),[](std::thread& x){x.join();});
 
     std::string outFilePath = "../" + output_path;
     std::vector<uint32_t> image(width * height);
@@ -413,7 +418,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (std::string(argv[5]) == "-threads") {
-        threads = atoi(argv[6]);
+        nthreads = atoi(argv[6]);
     } else {
         return 0;
     }
@@ -445,9 +450,10 @@ int main(int argc, char **argv) {
     lights.emplace_back(Vec3f(-30, 30, 10), 1.0);
     lights.emplace_back(Vec3f(-20, 40, 5), 1.2);
 
-    double start_time = omp_get_wtime();
+    auto start_time = std::chrono::steady_clock::now();
     render();
-    double end_time = omp_get_wtime();
-    std::cout << "Rendering time: " << end_time - start_time << std::endl;
+    auto end_time = std::chrono::steady_clock::now();
+    std::chrono::duration<double> render_seconds = end_time - start_time;
+    std::cout << "Rendering time: " << render_seconds.count() << std::endl;
     return 0;
 }

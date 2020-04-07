@@ -12,7 +12,9 @@ make -j 4
 
 ### Запуск: 
 
-./ rt −out <output_path> −scene <scene_number> −threads \<threads>
+./rt −out <output_path> −scene <scene_number> −threads \<threads>
+
+[Используемые открытые источники](https://github.com/ssloy/tinyraytracer)
 
 ### Базовая часть: 15 баллов
 
